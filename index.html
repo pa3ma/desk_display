@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#18233F">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:,">
+  <title>卓上ディスプレイ</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-screen="home" data-phase="idle">
+
+  <main id="home" class="screen">
+    <section class="now" aria-label="現在時刻">
+      <p class="date" id="home-date"></p>
+      <p class="clock" id="home-clock"></p>
+    </section>
+
+    <section class="weather" aria-label="天気">
+      <div class="weather-body" id="w-body">
+        <div class="weather-now">
+          <span class="weather-icon" id="w-icon" aria-hidden="true"></span>
+          <span class="weather-temp" id="w-temp"></span>
+          <span class="weather-text" id="w-text"></span>
+        </div>
+        <ol class="hours" id="w-hours"></ol>
+        <p class="tomorrow" id="w-tomorrow"></p>
+      </div>
+      <p class="message" id="w-message"></p>
+      <p class="status" id="w-status"></p>
+    </section>
+
+    <section class="agenda" aria-label="予定">
+      <ul class="events" id="c-events"></ul>
+      <p class="message" id="c-message"></p>
+      <p class="status" id="c-status"></p>
+    </section>
+
+    <a class="timer-strip" id="home-timer" href="#timer">
+      <span class="strip-phase" id="strip-phase"></span>
+      <span class="strip-bar" aria-hidden="true"><span class="strip-fill" id="strip-fill"></span></span>
+      <span class="strip-time" id="strip-time"></span>
+    </a>
+
+    <a class="corner-link" href="#settings">設定</a>
+  </main>
+
+  <main id="timer" class="screen">
+    <a class="corner-link" href="#home">時計に戻る</a>
+    <p class="phase" id="t-phase"></p>
+    <p class="remaining" id="t-remaining"></p>
+    <ol class="rounds" id="t-rounds"></ol>
+    <div class="controls">
+      <button type="button" class="primary" id="t-toggle">開始</button>
+      <button type="button" id="t-reset">リセット</button>
+      <button type="button" id="t-skip">スキップ</button>
+    </div>
+  </main>
+
+  <main id="settings" class="screen">
+    <form id="settings-form" novalidate>
+      <h1>設定</h1>
+
+      <fieldset>
+        <legend>天気の場所</legend>
+        <p class="help">地図アプリで場所を長押しすると、緯度と経度が表示されます。</p>
+        <div class="row">
+          <label>緯度<input name="latitude" inputmode="decimal" autocomplete="off" placeholder="35.68"><span class="error" data-error="latitude"></span></label>
+          <label>経度<input name="longitude" inputmode="decimal" autocomplete="off" placeholder="139.76"><span class="error" data-error="longitude"></span></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Googleカレンダー</legend>
+        <p class="help">中継スクリプトのURL（末尾に ?token=… が付いたもの）を貼り付けます。URLはこの端末の中にだけ保存されます。</p>
+        <label>中継URL<input name="relayUrl" type="password" autocomplete="off" spellcheck="false"><span class="error" data-error="relayUrl"></span></label>
+        <label>予定の何分前に知らせるか<input name="notifyLeadMin" inputmode="numeric"><span class="error" data-error="notifyLeadMin"></span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>ポモドーロ</legend>
+        <div class="row">
+          <label>作業（分）<input name="workMin" inputmode="numeric"><span class="error" data-error="workMin"></span></label>
+          <label>休憩（分）<input name="shortBreakMin" inputmode="numeric"><span class="error" data-error="shortBreakMin"></span></label>
+          <label>長休憩（分）<input name="longBreakMin" inputmode="numeric"><span class="error" data-error="longBreakMin"></span></label>
+          <label>長休憩までの作業回数<input name="cyclesBeforeLong" inputmode="numeric"><span class="error" data-error="cyclesBeforeLong"></span></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>画面</legend>
+        <label>操作がないとき何分で暗くするか<input name="dimAfterMin" inputmode="numeric"><span class="error" data-error="dimAfterMin"></span></label>
+      </fieldset>
+
+      <div class="controls">
+        <button type="submit" class="primary">保存する</button>
+        <a class="button" href="#home">保存せずに戻る</a>
+      </div>
+    </form>
+  </main>
+
+  <p id="toast" role="status" hidden></p>
+  <button type="button" id="sound-hint" hidden>タップして通知音を有効にする</button>
+  <div id="flash" aria-hidden="true"></div>
+  <div id="dim" aria-hidden="true"></div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

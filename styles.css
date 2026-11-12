@@ -1,0 +1,168 @@
+/* 卓上ディスプレイ。8インチ・1280×800 を 60cm ほど離れて見る前提。
+   画面全体の地色がタイマーの状態を表す（待機=藍、作業=トマト、休憩=若竹）。 */
+:root {
+  --indigo: #18233f;
+  --tomato: #7a2318;
+  --bamboo: #1e4d3b;
+  --paper: #f3eddd;
+  --muted: rgba(243, 237, 221, 0.64);
+  --line: rgba(243, 237, 221, 0.22);
+  --amber: #e8a72b;
+  --ground: var(--indigo);
+  --pad: 4vmin;
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--ground);
+  color: var(--paper);
+  font-family: "Roboto", "Noto Sans JP", "Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  font-size: 2.9vmin;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  transition: background-color 0.8s ease;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+body[data-phase="work"] { --ground: var(--tomato); }
+body[data-phase="short_break"], body[data-phase="long_break"] { --ground: var(--bamboo); }
+
+a { color: inherit; text-decoration: none; }
+ol, ul { list-style: none; padding: 0; }
+
+.screen { display: none; flex: 1; min-height: 0; padding: var(--pad); position: relative; }
+body[data-screen="home"] #home { display: grid; }
+body[data-screen="timer"] #timer { display: flex; }
+body[data-screen="settings"] #settings { display: block; overflow-y: auto; }
+
+.corner-link {
+  position: absolute; top: 0; right: 0;
+  min-width: 64px; min-height: 64px; padding: 2.6vmin var(--pad);
+  display: flex; align-items: center; justify-content: flex-end;
+  color: var(--muted); font-size: 2.6vmin;
+}
+
+/* ---------- ホーム ---------- */
+#home {
+  grid-template-columns: 1.3fr 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas: "now weather" "agenda weather" "strip strip";
+  column-gap: 5vmin; row-gap: 2vmin;
+}
+.now { grid-area: now; }
+.date { font-size: 4vmin; color: var(--muted); }
+.clock { font-size: 30vmin; font-weight: 300; line-height: 0.95; letter-spacing: -0.02em; margin-left: -0.04em; }
+
+.weather { grid-area: weather; padding-top: 9vmin; display: flex; flex-direction: column; }
+.weather-now { display: flex; align-items: baseline; gap: 2vmin; flex-wrap: wrap; }
+.weather-icon { font-size: 8vmin; line-height: 1; }
+.weather-temp { font-size: 11vmin; font-weight: 300; line-height: 1; }
+.weather-text { font-size: 3.6vmin; }
+.hours { display: grid; grid-template-columns: repeat(6, 1fr); margin-top: 4vmin; border-top: 1px solid var(--line); padding-top: 2vmin; }
+.hours li { display: flex; flex-direction: column; align-items: center; gap: 0.6vmin; }
+.hours .h-time { color: var(--muted); font-size: 2.4vmin; }
+.hours .h-icon { font-size: 4vmin; line-height: 1.2; }
+.hours .h-temp { font-size: 3vmin; }
+.hours .h-pop { color: var(--muted); font-size: 2.2vmin; }
+.tomorrow { margin-top: 3vmin; border-top: 1px solid var(--line); padding-top: 2vmin; }
+
+.agenda { grid-area: agenda; align-self: end; border-top: 1px solid var(--line); padding-top: 2vmin; }
+.events { display: grid; grid-template-columns: max-content 1fr; column-gap: 3vmin; align-items: baseline; font-size: 3.6vmin; }
+.events li { display: contents; }
+.events .e-time { color: var(--amber); }
+.events .e-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.message { font-size: 3vmin; }
+.message:empty, .status:empty { display: none; }
+.status { color: var(--muted); font-size: 2.2vmin; margin-top: 1.2vmin; }
+.weather .status { margin-top: auto; padding-top: 1.2vmin; }
+
+.timer-strip {
+  grid-area: strip; min-height: 64px;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 3vmin;
+  border-top: 1px solid var(--line); padding-top: 2vmin; font-size: 3.6vmin;
+}
+.strip-bar { height: 1.2vmin; border-radius: 1vmin; background: var(--line); overflow: hidden; }
+.strip-fill { display: block; height: 100%; width: 0; background: var(--paper); border-radius: inherit; }
+.strip-time { font-weight: 700; }
+
+/* ---------- タイマー ---------- */
+#timer { flex-direction: column; align-items: center; justify-content: center; gap: 2vmin; text-align: center; }
+.phase { font-size: 5vmin; }
+.remaining { font-size: 38vmin; font-weight: 700; line-height: 0.9; letter-spacing: -0.02em; }
+.rounds { display: flex; gap: 2.4vmin; margin: 2vmin 0 4vmin; }
+.rounds li { width: 3.4vmin; height: 3.4vmin; border-radius: 50%; border: 0.4vmin solid var(--paper); }
+.rounds li.done { background: var(--paper); }
+
+.controls { display: flex; gap: 2.4vmin; flex-wrap: wrap; justify-content: center; }
+button, .button {
+  font: inherit; font-size: 3.4vmin; color: var(--paper);
+  background: transparent; border: 0.3vmin solid var(--paper); border-radius: 1.6vmin;
+  min-height: 72px; min-width: 20vmin; padding: 1.4vmin 4vmin;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+button.primary { background: var(--paper); color: var(--ground); font-weight: 700; min-width: 30vmin; }
+button:active, .button:active { opacity: 0.7; }
+:focus-visible { outline: 0.5vmin solid var(--amber); outline-offset: 0.4vmin; }
+
+/* ---------- 設定 ---------- */
+#settings form { max-width: 62em; margin: 0 auto; padding-bottom: 6vmin; user-select: text; }
+#settings h1 { font-size: 5vmin; font-weight: 500; margin-bottom: 2vmin; }
+fieldset { border: 0; border-top: 1px solid var(--line); padding: 2.4vmin 0; }
+legend { font-size: 3.4vmin; padding-right: 1em; }
+.help { color: var(--muted); font-size: 2.6vmin; margin-bottom: 1.4vmin; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(12em, 1fr)); gap: 0 3vmin; }
+label { display: block; font-size: 2.6vmin; color: var(--muted); margin-bottom: 1.6vmin; }
+input {
+  display: block; width: 100%; min-height: 64px; margin-top: 0.6vmin; padding: 1vmin 1.6vmin;
+  font: inherit; font-size: 3.4vmin; color: var(--paper);
+  background: rgba(0, 0, 0, 0.22); border: 0.3vmin solid var(--line); border-radius: 1.2vmin;
+}
+input::placeholder { color: rgba(243, 237, 221, 0.3); }
+.error { display: block; color: var(--amber); font-size: 2.4vmin; min-height: 0; }
+#settings .controls { justify-content: flex-start; margin-top: 2vmin; }
+
+/* ---------- 重ねて出すもの ---------- */
+#toast {
+  position: fixed; left: var(--pad); right: var(--pad); top: var(--pad); z-index: 3;
+  background: var(--amber); color: #1b1503; font-size: 4vmin; font-weight: 700;
+  padding: 2vmin 3vmin; border-radius: 1.6vmin;
+}
+/* 画面の下端に帯として置く（内容に重ねない） */
+#sound-hint {
+  flex: none; width: 100%; min-height: 64px; border: 0; border-radius: 0;
+  background: var(--amber); color: #1b1503; font-size: 3vmin; font-weight: 700;
+}
+body[data-screen="settings"] #sound-hint { display: none; }
+[hidden] { display: none !important; }
+
+#flash { position: fixed; inset: 0; background: var(--paper); opacity: 0; pointer-events: none; z-index: 4; }
+body[data-flash] #flash { animation: flash 0.5s ease-in-out 3; }
+@keyframes flash { 0%, 100% { opacity: 0; } 50% { opacity: 0.55; } }
+
+#dim { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 5; transition: opacity 1.2s ease; }
+body.dim #dim { opacity: 0.78; pointer-events: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  body, #dim { transition: none; }
+  body[data-flash] #flash { animation: none; opacity: 0.35; }
+}
+
+/* ---------- 縦置き ---------- */
+@media (orientation: portrait) {
+  #home {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-areas: "now" "weather" "agenda" "strip";
+    row-gap: 4vmin;
+  }
+  .now { padding-top: 6vmin; }
+  .weather { padding-top: 0; border-top: 1px solid var(--line); padding-top: 3vmin; }
+  .weather .status { margin-top: 1.2vmin; }
+  .agenda { align-self: start; }
+}
