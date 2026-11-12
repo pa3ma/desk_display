@@ -7,7 +7,7 @@ const PATTERNS = {
 };
 const TONE_SEC = 0.18;
 
-export function createNotifier({ audioContextFactory, flash }) {
+export function createNotifier({ audioContextFactory, flash, onStateChange = () => {} }) {
   let ctx = null;
 
   function tone(freq, offsetSec, volume) {
@@ -27,23 +27,33 @@ export function createNotifier({ audioContextFactory, flash }) {
 
   return {
     // 利用者のタッチ操作の中から呼ぶ
+    // 音が実際に出せる状態（running）になるまで、タッチのたびに呼んでよい
     unlock() {
       try {
-        if (!ctx) ctx = audioContextFactory();
-        if (ctx.state === 'suspended') ctx.resume();
+        if (!ctx) {
+          ctx = audioContextFactory();
+          ctx.onstatechange = () => onStateChange();
+        }
+        if (ctx.state !== 'running') {
+          const pending = ctx.resume();
+          if (pending && pending.catch) pending.catch(() => {});
+        }
         tone(880, 0, 0.05); // 音が出ることを利用者に知らせる短い確認音
       } catch {
         ctx = null;
       }
     },
     isUnlocked() {
-      return ctx !== null;
+      return ctx !== null && ctx.state === 'running';
     },
     notify(kind) {
       flash(kind);
       if (!ctx) return;
       try {
-        if (ctx.state === 'suspended') ctx.resume();
+        if (ctx.state !== 'running') {
+          const pending = ctx.resume();
+          if (pending && pending.catch) pending.catch(() => {});
+        }
         for (const [freq, offset] of PATTERNS[kind] ?? PATTERNS.event) tone(freq, offset, 0.4);
       } catch { /* 音が出なくても色変化で通知済み */ }
     },

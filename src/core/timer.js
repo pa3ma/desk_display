@@ -85,7 +85,11 @@ export function createTimer({ now, durations, storage }) {
     },
     setDurations(next) {
       d = next;
-      if (s.status === 'idle') { s.remainingMs = phaseMs(s.phase); save(); }
+      // 設定を短くしたとき、古い残り時間のまま表示が止まって見えないようにする
+      if (s.status === 'idle') s.remainingMs = phaseMs(s.phase);
+      else if (s.status === 'paused') s.remainingMs = clamp(s.remainingMs, s.phase);
+      else s.endsAt = Math.min(s.endsAt, now() + phaseMs(s.phase));
+      save();
     },
   };
 }

@@ -88,3 +88,21 @@ test('時計が巻き戻っても残り時間はフェーズの全時間を超�
   timer.start(); t = -5000;
   assert.equal(timer.snapshot().remainingMs, 1500000);
 });
+
+test('走行中に時間設定を短くしたら、残り時間は新しい長さまでに縮めて数え続ける', () => {
+  timer.start(); t = 60000;
+  timer.setDurations({ ...durations, workMs: 60000 });
+  assert.equal(timer.snapshot().remainingMs, 60000);
+  t += 10000;
+  assert.equal(timer.snapshot().remainingMs, 50000);
+  const restored = createTimer({ now, durations: { ...durations, workMs: 60000 }, storage });
+  assert.equal(restored.snapshot().remainingMs, 50000);
+});
+
+test('一時停止中に時間設定を短くしたら、残り時間を新しい長さまでに縮める', () => {
+  timer.start(); t = 60000; timer.pause();
+  timer.setDurations({ ...durations, workMs: 120000 });
+  assert.equal(timer.snapshot().remainingMs, 120000);
+  timer.start(); t += 1000;
+  assert.equal(timer.snapshot().remainingMs, 119000);
+});

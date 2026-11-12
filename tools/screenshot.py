@@ -31,11 +31,24 @@ def main() -> int:
                     page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
                     page.goto(f"http://127.0.0.1:{PORT}/?demo=1{fragment}")
                     page.wait_for_timeout(1200)
-                    overflow = page.evaluate(
-                        "() => document.documentElement.scrollWidth > window.innerWidth + 1"
+                    # body は overflow:hidden なので、表示中の要素の位置を画面の枠と比べる
+                    outside = page.evaluate(
+                        """() => {
+                          const screen = document.querySelector('.screen:not([style*="display: none"])');
+                          const bad = [];
+                          for (const el of document.querySelectorAll('main *, #sound-hint')) {
+                            const r = el.getBoundingClientRect();
+                            if (r.width === 0 || r.height === 0) continue;
+                            if (el.closest('#settings')) continue;  // 設定は縦にスクロールする画面
+                            if (r.left < -1 || r.right > innerWidth + 1 || r.top < -1 || r.bottom > innerHeight + 1) {
+                              bad.push(el.id || el.className || el.tagName);
+                            }
+                          }
+                          return bad;
+                        }"""
                     )
-                    if overflow:
-                        problems.append(f"{name} {width}x{height}: 横にはみ出しています")
+                    if outside:
+                        problems.append(f"{name} {width}x{height}: 画面の外にはみ出しています: {outside[:5]}")
                     path = OUT / f"{name}-{width}x{height}.png"
                     page.screenshot(path=str(path))
                     print(path.relative_to(ROOT))

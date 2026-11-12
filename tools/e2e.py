@@ -23,6 +23,7 @@ def check(name, cond, detail=""):
 def run(page):
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.text.startswith("[desk]") else None)
     weather_ok = {"value": True}
 
     def weather(route):
@@ -71,6 +72,7 @@ def run(page):
     check("減光: 31分放置で暗くなっている", page.evaluate("document.body.classList.contains('dim')"))
     page.mouse.click(300, 200)  # 最初のタッチは明るさを戻すだけ
     page.click("#home-timer")
+    page.wait_for_function("document.body.dataset.screen === 'timer'")
     check("タイマー: 待機中は1分", page.inner_text("#t-remaining") == "01:00", page.inner_text("#t-remaining"))
     page.click("#t-toggle")
     check("タイマー: 開始で作業の色", page.evaluate("document.body.dataset.phase") == "work")
@@ -99,6 +101,121 @@ def run(page):
     check("ページのエラーなし", not errors, "; ".join(errors))
 
 
+SETTINGS = (
+    '{"latitude":35.68,"longitude":139.76,"relayUrl":"https://script.google.com/macros/s/x/exec?token=t",'
+    '"workMin":25,"shortBreakMin":5,"longBreakMin":15,"cyclesBeforeLong":4,"notifyLeadMin":10,"dimAfterMin":5}'
+)
+EVENTS = (
+    '[{"id":"e1","title":"設計レビュー","start":"2026-11-12T01:15:00.000Z","end":"2026-11-12T02:00:00.000Z","allDay":false},'
+    '{"id":"e2","title":"部品の受け取り","start":"2026-11-12T01:15:00.000Z","end":"2026-11-12T01:30:00.000Z","allDay":false}]'
+)
+
+
+def seeded_page(browser, extra_storage=None, **context_args):
+    """設定済みの端末を再現したページを作る（10:00 開始、通信は差し替え）"""
+    context = browser.new_context(viewport={"width": 1280, "height": 800}, **context_args)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.text.startswith("[desk]") else None)
+    state = {"weather": "ok", "relay": "ok"}
+
+    def weather(route):
+        if state["weather"] == "ok":
+            route.fulfill(status=200, content_type="application/json", body=FIXTURE)
+        else:
+            route.abort()
+
+    def relay(route):
+        if state["relay"] == "ok":
+            route.fulfill(status=200, content_type="application/json", body=EVENTS)
+        elif state["relay"] == "html":
+            route.fulfill(status=200, content_type="text/html", body="<html>ログイン</html>")
+        else:
+            route.abort()
+
+    page.route("https://api.open-meteo.com/**", weather)
+    page.route("https://script.google.com/**", relay)
+    storage = {"desk.settings": SETTINGS, **(extra_storage or {})}
+    for key, value in storage.items():
+        page.add_init_script(
+            f"if (!localStorage.getItem({key!r})) localStorage.setItem({key!r}, {value!r});"
+        )
+    page.clock.install(time="2026-11-12T10:00:00+09:00")
+    return page, state, errors
+
+
+def run_notifications(browser):
+    """予定の通知まわり（レビュー指摘 C1・I5・フォーカス3,4）"""
+    page, state, errors = seeded_page(browser)
+    page.goto(URL)
+    page.wait_for_timeout(300)
+    check("予定: 中継から取得して表示", "設計レビュー" in page.inner_text("#c-events"), page.inner_text("#c-events"))
+
+    page.clock.run_for(4 * 60000 + 58000)
+    check("通知前: まだ帯は出ていない", not page.is_visible("#toast"))
+    page.clock.run_for(2500)
+    check("通知: 開始10分前に帯が出る", page.is_visible("#toast"))
+    check("通知: 同時刻の予定は両方とも帯に出る",
+          "設計レビュー" in page.inner_text("#toast") and "部品の受け取り" in page.inner_text("#toast"),
+          page.inner_text("#toast"))
+    check("通知: 明滅している", page.evaluate("document.body.dataset.flash") == "event")
+    page.clock.run_for(30000)
+    check("通知: 5分以上放置していても暗くならない", not page.evaluate("document.body.classList.contains('dim')"))
+    page.clock.run_for(40000)
+    check("通知: 帯は60秒で消える", not page.is_visible("#toast"))
+
+    page.reload()
+    page.wait_for_timeout(300)
+    page.clock.run_for(3000)
+    check("再読み込み: 同じ予定を二度は通知しない", not page.is_visible("#toast"))
+
+    state["relay"] = "html"
+    page.clock.run_for(31 * 60000)
+    page.wait_for_timeout(300)
+    page.clock.run_for(1000)
+    check("中継がHTMLを返しても前回の予定を保つ", "設計レビュー" in page.inner_text("#c-events"), page.inner_text("#c-events"))
+    check("中継の失敗を表示する", "更新できません" in page.inner_text("#c-status"), page.inner_text("#c-status"))
+    check("通知まわり: ページのエラーなし", not errors, "; ".join(errors))
+    page.context.close()
+
+
+def run_recovery(browser):
+    """壊れた保存データと、起動時に通信できない場合（レビュー指摘 I2・I5）"""
+    bad = {"desk.cache.calendar": '{"data":{"oops":1},"updatedAt":1}', "desk.cache.weather": '{"data":{"x":1},"updatedAt":1}'}
+    page, state, errors = seeded_page(browser, extra_storage=bad)
+    state["weather"] = "down"
+    state["relay"] = "down"
+    page.goto(URL)
+    page.wait_for_timeout(300)
+    check("壊れた保存データでも時計が出る", page.inner_text("#home-clock") == "10:00", page.inner_text("#home-clock"))
+    page.clock.run_for(2000)
+    check("壊れた保存データでも時計が進み続ける", page.inner_text("#strip-time") == "25:00", page.inner_text("#strip-time"))
+    check("起動時に通信できない: 天気は取得できない旨を表示", "取得できません" in page.inner_text("#w-message"), page.inner_text("#w-message"))
+
+    state["weather"] = "ok"
+    state["relay"] = "ok"
+    page.clock.run_for(61000)
+    page.wait_for_timeout(300)
+    page.clock.run_for(1000)
+    check("通信が戻ると1分ほどで天気が出る", page.inner_text("#w-temp") == "14°", page.inner_text("#w-temp"))
+    check("通信が戻ると1分ほどで予定が出る", "設計レビュー" in page.inner_text("#c-events"), page.inner_text("#c-events"))
+    check("復旧まわり: ページのエラーなし", not errors, "; ".join(errors))
+    page.context.close()
+
+
+def run_touch(browser):
+    """タッチ操作で通知音の案内が正しく消える（レビュー指摘 I1）"""
+    page, state, errors = seeded_page(browser, has_touch=True)
+    page.goto(URL)
+    page.wait_for_timeout(300)
+    check("タッチ: 最初は案内が出ている", page.is_visible("#sound-hint"))
+    page.tap("#sound-hint")
+    page.wait_for_timeout(300)
+    check("タッチ: 案内をタップすると消える", not page.is_visible("#sound-hint"))
+    page.context.close()
+
+
 def main() -> int:
     server = subprocess.Popen(
         [sys.executable, "-m", "http.server", str(PORT), "--bind", "127.0.0.1"],
@@ -110,6 +227,9 @@ def main() -> int:
             browser = p.chromium.launch(channel="chrome")
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             run(page)
+            run_notifications(browser)
+            run_recovery(browser)
+            run_touch(browser)
             browser.close()
     finally:
         server.terminate()

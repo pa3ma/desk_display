@@ -5,12 +5,13 @@ import { dueNotifications, notifiedKey, loadNotified, saveNotified } from './cor
 import { createCachedSource } from './services/cache.js';
 import { loadWeather } from './services/weather.js';
 import { loadCalendar } from './services/calendar.js';
+import { nextRefreshDelay, withTimeout } from './services/refresh.js';
 import { createNotifier } from './ui/notify.js';
 import { createDimmer } from './ui/dim.js';
 import { renderHome, renderTimer, renderSettings, readSettingsForm } from './ui/views.js';
 import { formatEventTime } from './ui/format.js';
 
-const REFRESH_MS = 30 * 60000;
+const FETCH_TIMEOUT_MS = 20000;
 const FLASH_MS = 1600;
 const TOAST_MS = 60000;
 const demo = new URLSearchParams(location.search).has('demo');
@@ -61,18 +62,29 @@ const storage = demo ? memoryStorage({ 'desk.timer': JSON.stringify(demoState.ti
 let settings = demo ? demoState.settings : loadSettings(storage);
 const timer = createTimer({ now, durations: toDurations(settings), storage });
 
+const timedFetch = withTimeout((url, options) => fetch(url, options), FETCH_TIMEOUT_MS);
+
 const weatherSource = demo
   ? { refresh: async () => demoState.weather, current: () => demoState.weather }
-  : createCachedSource({ key: 'desk.cache.weather', load: () => loadWeather(settings), storage, now });
+  : createCachedSource({
+    key: 'desk.cache.weather', storage, now,
+    load: () => loadWeather(settings, timedFetch),
+    validate: (d) => Boolean(d && d.current && Array.isArray(d.hours) && d.tomorrow),
+  });
 const calendarSource = demo
   ? { refresh: async () => demoState.calendar, current: () => demoState.calendar }
-  : createCachedSource({ key: 'desk.cache.calendar', load: () => loadCalendar(settings), storage, now });
+  : createCachedSource({
+    key: 'desk.cache.calendar', storage, now,
+    load: () => loadCalendar(settings, timedFetch),
+    validate: Array.isArray,
+  });
 
-const notified = loadNotified(storage, now());
+let notified = loadNotified(storage, now());
 
 // ---- 通知 ----
 let flashTimeout = 0;
 function flash(kind) {
+  dimmer.touch(); // 暗くなっていたら明るさを戻してから知らせる
   document.body.dataset.flash = kind;
   clearTimeout(flashTimeout);
   flashTimeout = setTimeout(() => { delete document.body.dataset.flash; }, FLASH_MS);
@@ -80,6 +92,7 @@ function flash(kind) {
 const notifier = createNotifier({
   audioContextFactory: () => new (window.AudioContext || window.webkitAudioContext)(),
   flash,
+  onStateChange: () => updateSoundHint(),
 });
 
 const toast = document.getElementById('toast');
@@ -102,23 +115,30 @@ const dimmer = createDimmer({
   onChange: (dimmed) => document.body.classList.toggle('dim', dimmed),
 });
 
-document.addEventListener('pointerdown', () => {
-  dimmer.touch();
+for (const type of ['pointerdown', 'keydown', 'input']) {
+  document.addEventListener(type, () => dimmer.touch(), true);
+}
+// 音の許可は「指を離した」操作でないと通らないブラウザがあるため click で行う。
+// 実際に音が出せる状態になるまで、タッチのたびに試す。
+document.addEventListener('click', () => {
   if (!notifier.isUnlocked()) { notifier.unlock(); updateSoundHint(); }
   requestWakeLock();
 }, true);
 
 // ---- 画面を消さない（対応ブラウザのみ。失敗しても無視） ----
 let wakeLock = null;
+let wakeLockPending = false;
 async function requestWakeLock() {
-  if (wakeLock || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  if (wakeLock || wakeLockPending || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  wakeLockPending = true;
   try {
     wakeLock = await navigator.wakeLock.request('screen');
     wakeLock.addEventListener('release', () => { wakeLock = null; });
   } catch { wakeLock = null; }
+  wakeLockPending = false;
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { requestWakeLock(); frame(); refreshIfDue(); }
+  if (document.visibilityState === 'visible') { requestWakeLock(); frame(); refreshDue(); }
 });
 
 // ---- 画面の切り替え（#home / #timer / #settings） ----
@@ -155,14 +175,24 @@ document.getElementById('settings-form').addEventListener('submit', (event) => {
 });
 
 // ---- データの更新 ----
-let lastRefresh = 0;
-async function refreshAll() {
-  lastRefresh = now();
-  await Promise.all([weatherSource.refresh(), calendarSource.refresh()]);
+// 成功したら30分後、失敗したら1分後から間隔を倍にしながら取り直す
+const feeds = [weatherSource, calendarSource].map((source) => ({ source, failures: 0, nextAt: 0, busy: false, again: false }));
+async function refreshFeed(feed) {
+  if (feed.busy) { feed.again = true; return; }
+  feed.busy = true;
+  let failed = true;
+  try { failed = (await feed.source.refresh()).error; } catch { /* refresh は失敗を値で返すが念のため */ }
+  feed.busy = false;
+  feed.failures = failed ? feed.failures + 1 : 0;
+  feed.nextAt = now() + nextRefreshDelay(feed.failures);
+  if (feed.again) { feed.again = false; refreshFeed(feed); }
   frame();
 }
-function refreshIfDue() {
-  if (now() - lastRefresh >= REFRESH_MS) refreshAll();
+function refreshAll() {
+  for (const feed of feeds) refreshFeed(feed);
+}
+function refreshDue() {
+  for (const feed of feeds) if (!feed.busy && now() >= feed.nextAt) refreshFeed(feed);
 }
 window.addEventListener('online', refreshAll);
 
@@ -172,38 +202,53 @@ function phaseTotalMs(phase) {
   return phase === 'work' ? d.workMs : phase === 'short_break' ? d.shortBreakMs : d.longBreakMs;
 }
 
+// 1つの処理が失敗しても、時計とタイマーを止めない
+function guarded(step) {
+  // 同期処理だけを包む。ここで出る例外に中継URLは含まれない（通信は別経路）
+  try { step(); } catch (error) { console.error('[desk]', error); }
+}
+
 function frame() {
   const nowMs = now();
 
-  for (const change of timer.tick()) {
-    if (!change.stale) notifier.notify(change.from === 'work' ? 'work_end' : 'break_end');
-  }
+  guarded(() => {
+    for (const change of timer.tick()) {
+      if (!change.stale) notifier.notify(change.from === 'work' ? 'work_end' : 'break_end');
+    }
+  });
 
   const calendar = calendarSource.current();
-  const due = dueNotifications(calendar.data ?? [], nowMs, settings.notifyLeadMin * 60000, notified);
-  if (due.length > 0) {
+  guarded(() => {
+    const due = dueNotifications(calendar.data ?? [], nowMs, settings.notifyLeadMin * 60000, notified);
+    if (due.length === 0) return;
     for (const e of due) notified.add(notifiedKey(e));
     saveNotified(storage, notified);
+    notified = loadNotified(storage, nowMs); // 古い記録を落とす
+    for (const e of due) notified.add(notifiedKey(e));
     notifier.notify('event');
-    showToast(`まもなく ${formatEventTime(due[0], nowMs)} ${due[0].title}`);
-  }
+    showToast(`まもなく ${formatEventTime(due[0], nowMs)} ${due.map((e) => e.title).join('、')}`);
+  });
 
   const snap = timer.snapshot();
-  document.body.dataset.phase = snap.status === 'idle' ? 'idle' : snap.phase;
-  dimmer.hold(snap.status === 'running');
-  dimmer.tick();
+  guarded(() => {
+    document.body.dataset.phase = snap.status === 'idle' ? 'idle' : snap.phase;
+    dimmer.hold(snap.status === 'running' || !toast.hidden);
+    dimmer.tick();
+  });
 
   const screen = document.body.dataset.screen;
   if (screen === 'home') {
-    renderHome(document, { nowMs, weather: weatherSource.current(), calendar, timer: snap, totalMs: phaseTotalMs(snap.phase), settings });
+    guarded(() => renderHome(document, { nowMs, weather: weatherSource.current(), calendar, timer: snap, totalMs: phaseTotalMs(snap.phase), settings }));
   } else if (screen === 'timer') {
-    renderTimer(document, { timer: snap, cycles: settings.cyclesBeforeLong });
+    guarded(() => renderTimer(document, { timer: snap, cycles: settings.cyclesBeforeLong }));
   }
 }
 
 updateSoundHint();
-applyScreen();
 if (!demo) {
+  // 最初の描画より先に周期処理を始める（描画が失敗しても時計と再取得が動くように）
+  setInterval(() => { frame(); refreshDue(); }, 1000);
   refreshAll();
-  setInterval(() => { frame(); refreshIfDue(); }, 1000);
+  requestWakeLock();
 }
+applyScreen();

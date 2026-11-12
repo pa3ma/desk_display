@@ -4,12 +4,12 @@ import { createNotifier } from '../src/ui/notify.js';
 import { createDimmer } from '../src/ui/dim.js';
 
 // 鳴らした音の回数だけ数える偽の AudioContext
-function fakeAudio() {
-  const log = { tones: 0, resumed: 0 };
+function fakeAudio(initialState = 'running') {
+  const log = { tones: 0, resumed: 0, ctx: null };
   const node = () => ({ connect() {}, start() { log.tones++; }, stop() {},
     frequency: { value: 0 }, type: '',
     gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} } });
-  const factory = () => ({ currentTime: 0, state: 'running', destination: {},
+  const factory = () => (log.ctx = { currentTime: 0, state: initialState, destination: {},
     createOscillator: node, createGain: node, resume() { log.resumed++; return Promise.resolve(); } });
   return { log, factory };
 }
@@ -41,6 +41,28 @@ test('audioContextFactory が throw しても unlock と notify は例外を出�
   assert.equal(n.isUnlocked(), false);
   n.notify('break_end');
   assert.deepEqual(flashes, ['break_end']);
+});
+
+test('音声が suspended のままなら unlock 済みとみなさず、次のタッチで再試行する', () => {
+  const { log, factory } = fakeAudio('suspended');
+  const n = createNotifier({ audioContextFactory: factory, flash: () => {} });
+  n.unlock();
+  assert.equal(n.isUnlocked(), false);
+  assert.equal(log.resumed, 1);
+  n.unlock();
+  assert.equal(log.resumed, 2);
+  log.ctx.state = 'running';
+  assert.equal(n.isUnlocked(), true);
+});
+
+test('音声の状態が変わったら onStateChange を呼ぶ', () => {
+  const { log, factory } = fakeAudio('suspended');
+  let calls = 0;
+  const n = createNotifier({ audioContextFactory: factory, flash: () => {}, onStateChange: () => { calls++; } });
+  n.unlock();
+  log.ctx.state = 'running';
+  log.ctx.onstatechange();
+  assert.equal(calls, 1);
 });
 
 test('dimmer: afterMs 経過で true、touch で false、連続して同じ値は通知しない', () => {

@@ -39,3 +39,15 @@ test('cache: 失敗後に成功すれば error が消える', async () => {
   assert.deepEqual(await src.refresh(), { data: 7, updatedAt: 9, error: false });
   assert.deepEqual(src.current(), { data: 7, updatedAt: 9, error: false });
 });
+
+test('cache: validate に通らない保存データは未取得として扱う', () => {
+  const storage = fakeStorage({ k: JSON.stringify({ data: { not: 'array' }, updatedAt: 5 }) });
+  const src = createCachedSource({ key: 'k', load: async () => [], storage, now: () => 0, validate: Array.isArray });
+  assert.deepEqual(src.current(), { data: null, updatedAt: null, error: false });
+});
+
+test('cache: validate に通らない取得結果は失敗として扱い、前回値を保つ', async () => {
+  const storage = fakeStorage({ k: JSON.stringify({ data: [1], updatedAt: 5 }) });
+  const src = createCachedSource({ key: 'k', load: async () => 'oops', storage, now: () => 9, validate: Array.isArray });
+  assert.deepEqual(await src.refresh(), { data: [1], updatedAt: 5, error: true });
+});
