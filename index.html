@@ -11,45 +11,64 @@
 </head>
 <body data-screen="home" data-phase="idle">
 
-  <main id="home" class="screen">
+  <!-- ホーム -->
+  <main id="screen-home" class="screen">
     <section class="now" aria-label="現在時刻">
       <p class="date" id="home-date"></p>
       <p class="clock" id="home-clock"></p>
     </section>
 
-    <section class="weather" aria-label="天気">
-      <div class="weather-body" id="w-body">
-        <div class="weather-now">
-          <span class="weather-icon" id="w-icon" aria-hidden="true"></span>
-          <span class="weather-temp" id="w-temp"></span>
-          <span class="weather-text" id="w-text"></span>
-        </div>
-        <ol class="hours" id="w-hours"></ol>
-        <p class="tomorrow" id="w-tomorrow"></p>
+    <section class="home-weather" aria-label="今の天気">
+      <div id="hw-body" class="hw-body">
+        <span class="hw-icon" id="hw-icon" aria-hidden="true"></span>
+        <span class="hw-temp" id="hw-temp"></span>
+        <span class="hw-text" id="hw-text"></span>
       </div>
-      <p class="message" id="w-message"></p>
-      <p class="status" id="w-status"></p>
+      <p class="rain" id="home-rain" hidden></p>
+      <p class="message" id="hw-message"></p>
     </section>
 
-    <section class="agenda" aria-label="予定">
+    <p class="battery" id="home-battery" hidden></p>
+
+    <a class="bar-strip" id="home-timer" href="#timer" aria-label="タイマーを開く">
+      <span class="bar-phase" id="bar-phase"></span>
+      <span class="bar" id="home-bar" aria-hidden="true"></span>
+      <span class="bar-time" id="bar-time"></span>
+    </a>
+
+    <section class="agenda" aria-label="次の予定">
       <ul class="events" id="c-events"></ul>
       <p class="message" id="c-message"></p>
       <p class="status" id="c-status"></p>
     </section>
-
-    <a class="timer-strip" id="home-timer" href="#timer">
-      <span class="strip-phase" id="strip-phase"></span>
-      <span class="strip-bar" aria-hidden="true"><span class="strip-fill" id="strip-fill"></span></span>
-      <span class="strip-time" id="strip-time"></span>
-    </a>
-
-    <a class="corner-link" href="#settings">設定</a>
   </main>
 
-  <main id="timer" class="screen">
-    <a class="corner-link" href="#home">時計に戻る</a>
+  <!-- 週間カレンダー -->
+  <main id="screen-week" class="screen">
+    <ol class="week-days" id="week-days"></ol>
+    <p class="message" id="week-message"></p>
+    <p class="status" id="week-status"></p>
+  </main>
+
+  <!-- 24時間の天気 -->
+  <main id="screen-weather" class="screen">
+    <div id="w-body" class="w-body">
+      <div class="w-now">
+        <span class="w-icon" id="w-icon" aria-hidden="true"></span>
+        <span class="w-temp" id="w-temp"></span>
+        <span class="w-text" id="w-text"></span>
+      </div>
+      <ol class="w-hours" id="w-hours"></ol>
+    </div>
+    <p class="message" id="w-message"></p>
+    <p class="status" id="w-status"></p>
+  </main>
+
+  <!-- タイマー -->
+  <main id="screen-timer" class="screen">
     <p class="phase" id="t-phase"></p>
     <p class="remaining" id="t-remaining"></p>
+    <span class="bar bar-large" id="timer-bar" aria-hidden="true"></span>
     <ol class="rounds" id="t-rounds"></ol>
     <div class="controls">
       <button type="button" class="primary" id="t-toggle">開始</button>
@@ -58,50 +77,101 @@
     </div>
   </main>
 
-  <main id="settings" class="screen">
-    <form id="settings-form" novalidate>
+  <!-- 設定 -->
+  <main id="screen-settings" class="screen">
+    <div class="settings-inner">
       <h1>設定</h1>
 
-      <fieldset>
-        <legend>天気の場所</legend>
-        <p class="help">地図アプリで場所を長押しすると、緯度と経度が表示されます。</p>
-        <div class="row">
-          <label>緯度<input name="latitude" inputmode="decimal" autocomplete="off" placeholder="35.68"><span class="error" data-error="latitude"></span></label>
-          <label>経度<input name="longitude" inputmode="decimal" autocomplete="off" placeholder="139.76"><span class="error" data-error="longitude"></span></label>
+      <form id="settings-form" novalidate>
+        <fieldset>
+          <legend>天気の場所</legend>
+          <p class="help">地図アプリで場所を長押しすると、緯度と経度が表示されます。</p>
+          <div class="row">
+            <label>緯度<input name="latitude" inputmode="decimal" autocomplete="off" placeholder="35.68"><span class="error" data-error="latitude"></span></label>
+            <label>経度<input name="longitude" inputmode="decimal" autocomplete="off" placeholder="139.76"><span class="error" data-error="longitude"></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Googleカレンダー</legend>
+          <p class="help">中継スクリプトのURL（末尾に ?token=… が付いたもの）を貼り付けます。URLはこの端末の中にだけ保存されます。</p>
+          <label>中継URL<input name="relayUrl" type="password" autocomplete="new-password" spellcheck="false"><span class="error" data-error="relayUrl"></span></label>
+          <label>予定の何分前に知らせるか<input name="notifyLeadMin" inputmode="numeric"><span class="error" data-error="notifyLeadMin"></span></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>ポモドーロ</legend>
+          <div class="row">
+            <label>作業（分）<input name="workMin" inputmode="numeric"><span class="error" data-error="workMin"></span></label>
+            <label>休憩（分）<input name="shortBreakMin" inputmode="numeric"><span class="error" data-error="shortBreakMin"></span></label>
+            <label>長休憩（分）<input name="longBreakMin" inputmode="numeric"><span class="error" data-error="longBreakMin"></span></label>
+            <label>長休憩までの作業回数<input name="cyclesBeforeLong" inputmode="numeric"><span class="error" data-error="cyclesBeforeLong"></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>画面の明るさ</legend>
+          <label>操作がないとき何分で暗くするか<input name="dimAfterMin" inputmode="numeric"><span class="error" data-error="dimAfterMin"></span></label>
+          <label class="check"><input type="checkbox" name="nightEnabled"> 夜は早めに、より暗くする</label>
+          <div class="row">
+            <label>夜の始まり<input name="nightStart" type="time"><span class="error" data-error="nightStart"></span></label>
+            <label>夜の終わり<input name="nightEnd" type="time"><span class="error" data-error="nightEnd"></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>充電の自動制御（SwitchBot プラグミニ）</legend>
+          <p class="help">電池が下限まで減ったらプラグを入れ、上限まで充電したら切ります。中継スクリプトに SwitchBot の設定が必要です。</p>
+          <label class="check"><input type="checkbox" name="plugEnabled"> 自動で充電を入れたり切ったりする</label>
+          <div class="row">
+            <label>入れる残量（%）<input name="plugLow" inputmode="numeric"><span class="error" data-error="plugLow"></span></label>
+            <label>切る残量（%）<input name="plugHigh" inputmode="numeric"><span class="error" data-error="plugHigh"></span></label>
+          </div>
+          <p class="power-status" id="power-status" role="status"></p>
+        </fieldset>
+
+        <div class="controls">
+          <button type="submit" class="primary">保存する</button>
+          <a class="button" href="#home">保存せずに戻る</a>
         </div>
-      </fieldset>
+      </form>
 
-      <fieldset>
-        <legend>Googleカレンダー</legend>
-        <p class="help">中継スクリプトのURL（末尾に ?token=… が付いたもの）を貼り付けます。URLはこの端末の中にだけ保存されます。</p>
-        <label>中継URL<input name="relayUrl" type="password" autocomplete="new-password" spellcheck="false"><span class="error" data-error="relayUrl"></span></label>
-        <label>予定の何分前に知らせるか<input name="notifyLeadMin" inputmode="numeric"><span class="error" data-error="notifyLeadMin"></span></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>ポモドーロ</legend>
-        <div class="row">
-          <label>作業（分）<input name="workMin" inputmode="numeric"><span class="error" data-error="workMin"></span></label>
-          <label>休憩（分）<input name="shortBreakMin" inputmode="numeric"><span class="error" data-error="shortBreakMin"></span></label>
-          <label>長休憩（分）<input name="longBreakMin" inputmode="numeric"><span class="error" data-error="longBreakMin"></span></label>
-          <label>長休憩までの作業回数<input name="cyclesBeforeLong" inputmode="numeric"><span class="error" data-error="cyclesBeforeLong"></span></label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>画面</legend>
-        <label>操作がないとき何分で暗くするか<input name="dimAfterMin" inputmode="numeric"><span class="error" data-error="dimAfterMin"></span></label>
-      </fieldset>
-
-      <div class="controls">
-        <button type="submit" class="primary">保存する</button>
-        <a class="button" href="#home">保存せずに戻る</a>
-      </div>
-    </form>
+      <section class="reminders" aria-labelledby="rem-heading">
+        <h2 id="rem-heading">定期リマインダー</h2>
+        <p class="help">毎週決まった曜日と時刻に、音と表示で知らせます。追加と削除はすぐに保存されます。</p>
+        <ul class="rem-list" id="rem-list"></ul>
+        <form id="rem-form" novalidate>
+          <label>題名<input name="title" maxlength="30" autocomplete="off" placeholder="ゴミ出し"><span class="error" data-rem-error="title"></span></label>
+          <fieldset class="weekdays">
+            <legend>曜日</legend>
+            <label><input type="checkbox" name="weekday" value="1">月</label>
+            <label><input type="checkbox" name="weekday" value="2">火</label>
+            <label><input type="checkbox" name="weekday" value="3">水</label>
+            <label><input type="checkbox" name="weekday" value="4">木</label>
+            <label><input type="checkbox" name="weekday" value="5">金</label>
+            <label><input type="checkbox" name="weekday" value="6">土</label>
+            <label><input type="checkbox" name="weekday" value="0">日</label>
+            <span class="error" data-rem-error="weekdays"></span>
+          </fieldset>
+          <label>時刻<input name="time" type="time" value="08:00"><span class="error" data-rem-error="time"></span></label>
+          <div class="controls">
+            <button type="submit">追加する</button>
+          </div>
+        </form>
+      </section>
+    </div>
   </main>
 
-  <p id="toast" role="status" hidden></p>
   <button type="button" id="sound-hint" hidden>タップして通知音を有効にする</button>
+
+  <nav id="tabs" aria-label="画面の切り替え">
+    <a href="#home" data-tab="home">ホーム</a>
+    <a href="#week" data-tab="week">週間</a>
+    <a href="#weather" data-tab="weather">天気</a>
+    <a href="#settings" data-tab="settings">設定</a>
+  </nav>
+
+  <p id="toast" role="status" hidden></p>
   <div id="flash" aria-hidden="true"></div>
   <div id="dim" aria-hidden="true"></div>
 

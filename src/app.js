@@ -2,18 +2,31 @@
 import { createTimer } from './core/timer.js';
 import { loadSettings, saveSettings, toDurations } from './core/settings.js';
 import { dueNotifications, notifiedKey, loadNotified, saveNotified } from './core/schedule.js';
+import { validateReminder, loadReminders, saveReminders, dueReminders, reminderKey, MAX_REMINDERS } from './core/reminders.js';
+import { jstDayStart } from './core/week.js';
+import { isNight } from './core/night.js';
+import { plugDecision, loadPowerState, savePowerState } from './core/power.js';
 import { createCachedSource } from './services/cache.js';
 import { loadWeather } from './services/weather.js';
 import { loadCalendar } from './services/calendar.js';
+import { sendPlug, sendHeartbeat } from './services/plug.js';
 import { nextRefreshDelay, withTimeout } from './services/refresh.js';
 import { createNotifier } from './ui/notify.js';
 import { createDimmer } from './ui/dim.js';
-import { renderHome, renderTimer, renderSettings, readSettingsForm } from './ui/views.js';
-import { formatEventTime } from './ui/format.js';
+import {
+  renderHome, renderWeek, renderWeather, renderTimer, renderTabs, renderSettings, readSettingsForm,
+  renderPowerStatus, renderReminderList, renderReminderErrors, readReminderForm, resetReminderForm,
+} from './ui/views.js';
+import { formatEventTime, formatClock } from './ui/format.js';
 
 const FETCH_TIMEOUT_MS = 20000;
 const FLASH_MS = 1600;
 const TOAST_MS = 60000;
+const RETURN_HOME_MS = 2 * 60000;
+const NIGHT_DIM_MS = 30000;
+const POWER_CHECK_MS = 60000;
+const HEARTBEAT_MS = 10 * 60000;
+const SCREENS = ['home', 'week', 'weather', 'settings', 'timer'];
 const demo = new URLSearchParams(location.search).has('demo');
 
 function memoryStorage(initial = {}) {
@@ -39,16 +52,28 @@ function demoData() {
   const base = Date.parse('2026-11-12T00:00:00+09:00');
   const codes = [2, 2, 3, 61, 61, 3];
   const hours = Array.from({ length: 48 }, (_, i) => ({
-    timeMs: base + i * H, tempC: 16 - Math.abs(14 - (i % 24)) * 0.6, code: codes[i % codes.length], pop: (i * 7) % 90,
+    timeMs: base + i * H, tempC: 16 - Math.abs(14 - (i % 24)) * 0.6, code: codes[i % codes.length], pop: (i * 13) % 90,
   }));
+  const ev = (id, title, startH, lengthH, allDay = false) => ({ id, title, startMs: base + startH * H, endMs: base + (startH + lengthH) * H, allDay });
+  const reminders = [
+    { id: 'r1', title: '燃えるゴミ', weekdays: [2, 5], time: '08:00' },
+    { id: 'r2', title: '植物の水やり', weekdays: [0, 3, 6], time: '19:30' },
+  ];
   return {
-    settings: { ...loadSettings(memoryStorage()), latitude: 35.68, longitude: 139.76, relayUrl: 'https://script.google.com/demo' },
+    settings: { ...loadSettings(memoryStorage()), latitude: 35.68, longitude: 139.76, relayUrl: 'https://script.google.com/demo', plugEnabled: true },
     timerState: { phase: 'work', status: 'running', endsAt: DEMO_NOW + 18 * 60000 + 42000, remainingMs: 0, completedWork: 2 },
+    reminders,
+    battery: { level: 62, charging: true },
     weather: { data: { current: { tempC: 16.4, code: 2 }, hours, tomorrow: { code: 63, maxC: 13.1, minC: 9.9 } }, updatedAt: DEMO_NOW - 5 * 60000, error: false },
     calendar: {
       data: [
-        { id: 'd1', title: '設計レビュー', startMs: DEMO_NOW + 25 * 60000, endMs: DEMO_NOW + 85 * 60000, allDay: false },
-        { id: 'd2', title: '部品の受け取り（長い題名は末尾を省略して表示します）', startMs: base + 34 * H, endMs: base + 35 * H, allDay: false },
+        ev('d1', '設計レビュー', 14.5, 1),
+        ev('d2', '部品の受け取り（長い題名は末尾を省略して表示します）', 34, 1),
+        ev('d3', '歯医者', 63, 1),
+        ev('d4', '出張', 96, 48, true),
+        ev('d5', '定例会議', 106, 1),
+        ev('d6', '夜間メンテナンス', 140, 5),
+        ev('d7', '週次の振り返り', 155, 1),
       ],
       updatedAt: DEMO_NOW - 5 * 60000, error: false,
     },
@@ -57,9 +82,12 @@ function demoData() {
 
 const demoState = demo ? demoData() : null;
 const now = demo ? () => DEMO_NOW : () => Date.now();
-const storage = demo ? memoryStorage({ 'desk.timer': JSON.stringify(demoState.timerState) }) : deviceStorage();
+const storage = demo
+  ? memoryStorage({ 'desk.timer': JSON.stringify(demoState.timerState), 'desk.reminders': JSON.stringify(demoState.reminders) })
+  : deviceStorage();
 
 let settings = demo ? demoState.settings : loadSettings(storage);
+let reminders = loadReminders(storage);
 const timer = createTimer({ now, durations: toDurations(settings), storage });
 
 const timedFetch = withTimeout((url, options) => fetch(url, options), FETCH_TIMEOUT_MS);
@@ -106,17 +134,18 @@ function showToast(text) {
 toast.addEventListener('click', () => { toast.hidden = true; });
 
 const soundHint = document.getElementById('sound-hint');
-function updateSoundHint() { soundHint.hidden = notifier.isUnlocked(); }
+function updateSoundHint() { soundHint.hidden = demo || notifier.isUnlocked(); }
 
-// ---- 減光 ----
+// ---- 減光と、操作がないときのホームへの復帰 ----
 const dimmer = createDimmer({
   now,
   afterMs: settings.dimAfterMin * 60000,
   onChange: (dimmed) => document.body.classList.toggle('dim', dimmed),
 });
 
+let lastInteraction = now();
 for (const type of ['pointerdown', 'keydown', 'input']) {
-  document.addEventListener(type, () => dimmer.touch(), true);
+  document.addEventListener(type, () => { dimmer.touch(); lastInteraction = now(); }, true);
 }
 // 音の許可は「指を離した」操作でないと通らないブラウザがあるため click で行う。
 // 実際に音が出せる状態になるまで、タッチのたびに試す。
@@ -141,18 +170,96 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { requestWakeLock(); frame(); refreshDue(); }
 });
 
-// ---- 画面の切り替え（#home / #timer / #settings） ----
+// ---- 電池と充電の自動制御 ----
+let battery = demo ? demoState.battery : null; // { level: 0〜100, charging }
+let batteryUnavailable = false;
+let powerLast = loadPowerState(storage);        // 最後に成功した指示
+let powerFailed = false;                        // 最後の指示が中継に届かなかった
+let powerBusy = false;
+let nextPowerCheckAt = 0;
+let nextHeartbeatAt = 0;
+
+function startBattery() {
+  if (demo) return;
+  if (typeof navigator.getBattery !== 'function') { batteryUnavailable = true; return; }
+  navigator.getBattery().then((manager) => {
+    const read = () => {
+      const level = Number(manager.level);
+      battery = Number.isFinite(level) ? { level: Math.round(level * 100), charging: Boolean(manager.charging) } : null;
+      evaluatePower();
+    };
+    manager.addEventListener('levelchange', read);
+    manager.addEventListener('chargingchange', read);
+    read();
+  }).catch(() => { batteryUnavailable = true; });
+}
+
+function powerActive() {
+  return !demo && settings.plugEnabled && settings.relayUrl !== '' && battery !== null;
+}
+
+async function evaluatePower() {
+  nextPowerCheckAt = now() + POWER_CHECK_MS;
+  if (!powerActive() || powerBusy) return;
+  const decision = plugDecision({
+    level: battery.level, charging: battery.charging, low: settings.plugLow, high: settings.plugHigh,
+    last: powerLast, nowMs: now(),
+  });
+  if (decision === null) return;
+  powerBusy = true;
+  const ok = await sendPlug(settings, decision, timedFetch);
+  powerBusy = false;
+  powerFailed = !ok;
+  if (ok) {
+    powerLast = { state: decision, atMs: now() };
+    savePowerState(storage, powerLast);
+    nextHeartbeatAt = now() + HEARTBEAT_MS; // 指示も生存連絡を兼ねる
+  }
+}
+
+// 電池を読めない端末では生存連絡を送らない。中継の安全策がプラグを入れたままにする
+async function powerTick() {
+  if (!powerActive()) return;
+  if (now() >= nextPowerCheckAt) evaluatePower();
+  if (now() >= nextHeartbeatAt) {
+    nextHeartbeatAt = now() + HEARTBEAT_MS;
+    sendHeartbeat(settings, timedFetch);
+  }
+}
+
+function powerStatusText() {
+  if (batteryUnavailable) return 'この端末では電池の残量を読めないため、自動制御は行いません。プラグは入れたままにしてください。';
+  const parts = [battery ? `残量 ${battery.level}%${battery.charging ? '（充電中）' : ''}` : '電池の状態を確認しています'];
+  if (!settings.plugEnabled) parts.push('自動制御は無効です');
+  else if (!settings.relayUrl) parts.push('Googleカレンダーの中継URLを入れると使えます');
+  if (powerLast) parts.push(`最後の指示: ${powerLast.state === 'on' ? '入' : '切'}（${formatClock(powerLast.atMs)}）`);
+  if (powerFailed) parts.push('指示が中継に届いていません。中継の更新と SwitchBot の設定を確認してください');
+  return parts.join('　');
+}
+
+// ---- 画面の切り替え（#home / #week / #weather / #settings / #timer） ----
 function currentScreen() {
   const name = location.hash.replace('#', '');
-  return name === 'timer' || name === 'settings' ? name : 'home';
+  return SCREENS.includes(name) ? name : 'home';
 }
 function applyScreen() {
   const screen = currentScreen();
   document.body.dataset.screen = screen;
-  if (screen === 'settings') renderSettings(document, { values: settings });
+  lastInteraction = now();
+  renderTabs(document, screen);
+  if (screen === 'settings') {
+    renderSettings(document, { values: settings });
+    renderReminderList(document, reminders);
+    renderReminderErrors(document);
+  }
   frame();
 }
 window.addEventListener('hashchange', applyScreen);
+
+function returnHomeIfIdle(screen, snap) {
+  const leaves = screen === 'week' || screen === 'weather' || (screen === 'timer' && snap.status === 'idle');
+  if (leaves && now() - lastInteraction >= RETURN_HOME_MS) location.hash = '#home';
+}
 
 // ---- 操作 ----
 document.getElementById('t-toggle').addEventListener('click', () => {
@@ -169,9 +276,34 @@ document.getElementById('settings-form').addEventListener('submit', (event) => {
   if (!result.ok) { renderSettings(document, { values: input, errors: result.errors }); return; }
   settings = result.settings;
   timer.setDurations(toDurations(settings));
-  dimmer.setAfter(settings.dimAfterMin * 60000);
+  nextPowerCheckAt = 0;
+  nextHeartbeatAt = 0;
   location.hash = '#home';
   refreshAll();
+});
+
+document.getElementById('rem-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const checked = validateReminder(readReminderForm(document));
+  if (!checked.ok) { renderReminderErrors(document, checked.errors); return; }
+  const next = [...reminders, checked.reminder];
+  if (next.length > MAX_REMINDERS || !saveReminders(storage, next).ok) {
+    renderReminderErrors(document, { title: `登録できるのは${MAX_REMINDERS}件までです` });
+    return;
+  }
+  reminders = next;
+  resetReminderForm(document);
+  renderReminderErrors(document);
+  renderReminderList(document, reminders);
+});
+
+document.getElementById('rem-list').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-id]');
+  if (!button) return;
+  const next = reminders.filter((r) => r.id !== button.dataset.id);
+  if (!saveReminders(storage, next).ok) return;
+  reminders = next;
+  renderReminderList(document, reminders);
 });
 
 // ---- データの更新 ----
@@ -208,6 +340,13 @@ function guarded(step) {
   try { step(); } catch (error) { console.error('[desk]', error); }
 }
 
+function remember(keys, nowMs) {
+  for (const key of keys) notified.add(key);
+  saveNotified(storage, notified);
+  notified = loadNotified(storage, nowMs); // 古い記録を落とす
+  for (const key of keys) notified.add(key);
+}
+
 function frame() {
   const nowMs = now();
 
@@ -221,34 +360,52 @@ function frame() {
   guarded(() => {
     const due = dueNotifications(calendar.data ?? [], nowMs, settings.notifyLeadMin * 60000, notified);
     if (due.length === 0) return;
-    for (const e of due) notified.add(notifiedKey(e));
-    saveNotified(storage, notified);
-    notified = loadNotified(storage, nowMs); // 古い記録を落とす
-    for (const e of due) notified.add(notifiedKey(e));
+    remember(due.map(notifiedKey), nowMs);
     notifier.notify('event');
     showToast(`まもなく ${formatEventTime(due[0], nowMs)} ${due.map((e) => e.title).join('、')}`);
+  });
+
+  guarded(() => {
+    const due = dueReminders(reminders, nowMs, notified);
+    if (due.length === 0) return;
+    const day = jstDayStart(nowMs);
+    remember(due.map((r) => reminderKey(r, day)), nowMs);
+    notifier.notify('event');
+    showToast(`🔁 ${due[0].time} ${due.map((r) => r.title).join('、')}`);
   });
 
   const snap = timer.snapshot();
   guarded(() => {
     document.body.dataset.phase = snap.status === 'idle' ? 'idle' : snap.phase;
+    const night = settings.nightEnabled && isNight(nowMs, settings.nightStart, settings.nightEnd);
+    document.body.classList.toggle('night', night);
+    dimmer.setAfter(night ? NIGHT_DIM_MS : settings.dimAfterMin * 60000);
     dimmer.hold(snap.status === 'running' || !toast.hidden);
     dimmer.tick();
   });
 
   const screen = document.body.dataset.screen;
+  const totalMs = phaseTotalMs(snap.phase);
   if (screen === 'home') {
-    guarded(() => renderHome(document, { nowMs, weather: weatherSource.current(), calendar, timer: snap, totalMs: phaseTotalMs(snap.phase), settings }));
+    guarded(() => renderHome(document, { nowMs, weather: weatherSource.current(), calendar, timer: snap, totalMs, settings, battery }));
+  } else if (screen === 'week') {
+    guarded(() => renderWeek(document, { nowMs, calendar, reminders, settings }));
+  } else if (screen === 'weather') {
+    guarded(() => renderWeather(document, { nowMs, weather: weatherSource.current(), settings }));
   } else if (screen === 'timer') {
-    guarded(() => renderTimer(document, { timer: snap, cycles: settings.cyclesBeforeLong }));
+    guarded(() => renderTimer(document, { timer: snap, cycles: settings.cyclesBeforeLong, totalMs }));
+  } else if (screen === 'settings') {
+    guarded(() => renderPowerStatus(document, powerStatusText()));
   }
+  guarded(() => returnHomeIfIdle(screen, snap));
 }
 
 updateSoundHint();
 if (!demo) {
   // 最初の描画より先に周期処理を始める（描画が失敗しても時計と再取得が動くように）
-  setInterval(() => { frame(); refreshDue(); }, 1000);
+  setInterval(() => { frame(); refreshDue(); guarded(powerTick); }, 1000);
   refreshAll();
   requestWakeLock();
+  startBattery();
 }
 applyScreen();

@@ -50,3 +50,13 @@ export function formatUpdated(ms) {
 export function phaseLabel(phase) {
   return phase === 'work' ? '作業' : phase === 'short_break' ? '休憩' : '長休憩';
 }
+
+export function formatWeekHead(ms) {
+  const p = parts(ms);
+  return `${p.weekday} ${p.day}`;
+}
+
+export function formatRain(notice) {
+  const pop = notice.pop === null || notice.pop === undefined ? '' : `（${Math.round(notice.pop)}%）`;
+  return `${formatHour(notice.timeMs)}ごろから${notice.text}${pop}`;
+}

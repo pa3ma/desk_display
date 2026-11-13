@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "out"
 PORT = 8765
-SCREENS = {"home": "", "timer": "#timer", "settings": "#settings"}
+SCREENS = {"home": "", "week": "#week", "weather": "#weather", "timer": "#timer", "settings": "#settings"}
 SIZES = [(1280, 800), (800, 1280)]
 
 
@@ -36,10 +36,10 @@ def main() -> int:
                         """() => {
                           const screen = document.querySelector('.screen:not([style*="display: none"])');
                           const bad = [];
-                          for (const el of document.querySelectorAll('main *, #sound-hint')) {
+                          for (const el of document.querySelectorAll('main *, #sound-hint, #tabs *')) {
                             const r = el.getBoundingClientRect();
                             if (r.width === 0 || r.height === 0) continue;
-                            if (el.closest('#settings')) continue;  // 設定は縦にスクロールする画面
+                            if (el.closest('#screen-settings')) continue;  // 設定は縦にスクロールする画面
                             if (r.left < -1 || r.right > innerWidth + 1 || r.top < -1 || r.bottom > innerHeight + 1) {
                               bad.push(el.id || el.className || el.tagName);
                             }

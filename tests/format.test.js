@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatClock, formatDate, formatRemaining, formatEventTime, formatUpdated, formatHour, phaseLabel } from '../src/ui/format.js';
+import { formatClock, formatDate, formatRemaining, formatEventTime, formatUpdated, formatHour, phaseLabel, formatWeekHead, formatRain } from '../src/ui/format.js';
 
 const at = (iso) => Date.parse(iso);
 
@@ -50,4 +50,14 @@ test('formatUpdated / formatHour / phaseLabel', () => {
   assert.equal(phaseLabel('work'), '作業');
   assert.equal(phaseLabel('short_break'), '休憩');
   assert.equal(phaseLabel('long_break'), '長休憩');
+});
+
+test('formatWeekHead: 週間の列の見出しは「曜日 日」（日本時間）', () => {
+  assert.equal(formatWeekHead(at('2026-11-12T00:00:00+09:00')), '木 12');
+  assert.equal(formatWeekHead(at('2026-11-15T15:00:00Z')), '月 16');
+});
+
+test('formatRain: 雨の予告の文', () => {
+  assert.equal(formatRain({ timeMs: at('2026-11-12T15:00:00+09:00'), pop: 60, text: '雨' }), '15時ごろから雨（60%）');
+  assert.equal(formatRain({ timeMs: at('2026-11-12T15:00:00+09:00'), pop: null, text: '雪' }), '15時ごろから雪');
 });
