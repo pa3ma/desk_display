@@ -115,6 +115,12 @@ def new_page(browser, *, start="2026-11-12T10:00:00+09:00", settings=None, stora
         page.add_init_script(f"if (!localStorage.getItem({key!r})) localStorage.setItem({key!r}, {value!r});")
     if battery == "none":
         page.add_init_script(NO_BATTERY)
+    elif battery == "reject":
+        page.add_init_script("navigator.getBattery = () => Promise.reject(new Error('denied'));")
+    elif battery == "pending":
+        page.add_init_script("navigator.getBattery = () => new Promise(() => {});")
+    elif battery == "nan":
+        page.add_init_script(BATTERY_MOCK % ("NaN", "false"))
     else:
         level, charging = battery
         page.add_init_script(BATTERY_MOCK % (level, "true" if charging else "false"))
@@ -439,6 +445,68 @@ def run_power(browser):
     page.context.close()
 
 
+# ------------------------------------------------------------------ 電池の値を信用できないとき（v2 レビュー指摘 I-1〜I-3）
+def run_power_trust(browser):
+    # 値がうそ（いつも100%・充電中のまま）: 切る指示を2回送り直しても充電中なら、自動制御をやめてプラグを入れる
+    page, state, errors = new_page(browser, settings={"plugEnabled": True}, events=[], battery=(1.0, True))
+    open_app(page)
+    page.clock.run_for(2000)
+    page.wait_for_timeout(200)
+    check("値がうそ: まず「切」を送る", state["plug"] == ["off"], str(state["plug"]))
+    for _ in range(12):
+        page.clock.run_for(60000)
+        page.wait_for_timeout(30)
+    check("値がうそ: 送り直しても充電中のままなら、自動制御をやめて「入」を送る",
+          state["plug"] == ["off", "off", "off", "on"], str(state["plug"]))
+    beats = state["heartbeat"]
+    for _ in range(15):
+        page.clock.run_for(60000)
+        page.wait_for_timeout(20)
+    check("値がうそ: やめた後は指示も生存連絡も送らない（中継の安全策に任せる）",
+          state["plug"] == ["off", "off", "off", "on"] and state["heartbeat"] == beats, f"{state['plug']} hb {beats}→{state['heartbeat']}")
+    go(page, "settings")
+    check("値がうそ: 設定画面に自動制御を止めた旨を表示", "止めました" in page.inner_text("#power-status"), page.inner_text("#power-status"))
+    page.click("#settings-form button[type=submit]")
+    page.wait_for_timeout(200)
+    page.clock.run_for(61000)
+    page.wait_for_timeout(200)
+    check("値がうそ: 設定を保存し直すと再開する", state["plug"][-1] == "off" and len(state["plug"]) == 5, str(state["plug"]))
+    check("値がうそ: ページのエラーなし", not errors, "; ".join(errors))
+    page.context.close()
+
+    # 値が止まる（切った後、60分たっても残量が変わらない）
+    page, state, errors = new_page(browser, settings={"plugEnabled": True}, events=[], battery=(0.85, False))
+    open_app(page)
+    page.clock.run_for(2000)
+    page.wait_for_timeout(200)
+    check("値が止まる: まず「切」を送る", state["plug"] == ["off"], str(state["plug"]))
+    for _ in range(58):
+        page.clock.run_for(60000)
+        page.wait_for_timeout(15)
+    check("値が止まる: 60分たつ前は何も送らない", state["plug"] == ["off"], str(state["plug"]))
+    check("値が止まる: 60分たつ前は生存連絡を送る", state["heartbeat"] >= 5, str(state["heartbeat"]))
+    for _ in range(4):
+        page.clock.run_for(60000)
+        page.wait_for_timeout(30)
+    check("値が止まる: 60分変わらなければ「入」を送る", state["plug"] == ["off", "on"], str(state["plug"]))
+    page.context.close()
+
+    # 電池を読めない3つの場合: 拒否される・値が数でない・返事がない
+    for mode, label in (("reject", "拒否"), ("nan", "値が数でない"), ("pending", "返事がない")):
+        page, state, errors = new_page(browser, settings={"plugEnabled": True}, events=[], battery=mode)
+        open_app(page)
+        page.clock.run_for(12000)
+        page.wait_for_timeout(200)
+        go(page, "settings")
+        check(f"電池を読めない（{label}）: 読めない旨を表示", "読めない" in page.inner_text("#power-status"), page.inner_text("#power-status"))
+        page.clock.run_for(11 * 60000)
+        page.wait_for_timeout(200)
+        check(f"電池を読めない（{label}）: 指示も生存連絡も送らない", state["plug"] == [] and state["heartbeat"] == 0,
+              f"{state['plug']} hb {state['heartbeat']}")
+        check(f"電池を読めない（{label}）: ページのエラーなし", not errors, "; ".join(errors))
+        page.context.close()
+
+
 # ------------------------------------------------------------------ 復旧とタッチ（v1 レビュー指摘の確認を引き継ぐ）
 def run_recovery_and_touch(browser):
     bad = {"desk.cache.calendar": '{"data":{"oops":1},"updatedAt":1}', "desk.cache.weather": '{"data":{"x":1},"updatedAt":1}',
@@ -486,7 +554,7 @@ def main() -> int:
         with sync_playwright() as p:
             browser = p.chromium.launch(channel="chrome")
             for scenario in (run_first_use, run_tabs_and_week, run_notifications, run_reminders,
-                             run_rain_and_night, run_power, run_recovery_and_touch):
+                             run_rain_and_night, run_power, run_power_trust, run_recovery_and_touch):
                 scenario(browser)
             browser.close()
     finally:

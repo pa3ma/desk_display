@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { relayUrlFor, sendPlug, sendHeartbeat } from '../src/services/plug.js';
+import { withTimeout } from '../src/services/refresh.js';
 
 const settings = { relayUrl: 'https://script.google.com/macros/s/a/exec?token=t' };
 const reply = (body, ok = true) => async (url) => { reply.url = url; return { ok, status: ok ? 200 : 500, json: async () => body }; };
@@ -37,4 +38,10 @@ test('sendHeartbeat: ok のときだけ成功', async () => {
   assert.equal(new URL(reply.url).searchParams.get('action'), 'heartbeat');
   assert.equal(await sendHeartbeat(settings, reply([])), false);
   assert.equal(await sendHeartbeat({ relayUrl: '' }, reply({ ok: true })), false);
+});
+
+test('sendPlug: 中継の本文が届かないまま止まっても、時間切れで失敗として返る', async () => {
+  const stall = withTimeout(async () => ({ ok: true, status: 200, json: () => new Promise(() => {}) }), 30);
+  assert.equal(await sendPlug(settings, 'on', stall), false);
+  assert.equal(await sendHeartbeat(settings, stall), false);
 });

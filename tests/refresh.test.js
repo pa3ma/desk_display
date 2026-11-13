@@ -11,9 +11,21 @@ test('nextRefreshDelay: 成功後は30分、失敗後は1分から倍々で最�
   assert.equal(nextRefreshDelay(60), 30 * 60000);
 });
 
-test('withTimeout: 時間内に返れば結果をそのまま返す', async () => {
-  const f = withTimeout(async (url) => `ok:${url}`, 1000);
-  assert.equal(await f('u'), 'ok:u');
+test('withTimeout: 時間内に返れば、本文もそのまま読める', async () => {
+  const f = withTimeout(async (url) => ({ ok: true, status: 200, json: async () => `ok:${url}` }), 1000);
+  const res = await f('u');
+  assert.equal(res.ok, true); assert.equal(res.status, 200);
+  assert.equal(await res.json(), 'ok:u');
+});
+
+test('withTimeout: 本文の読み込みが止まっても時間切れで失敗する', async () => {
+  const stall = async () => ({ ok: true, status: 200, json: () => new Promise(() => {}) });
+  const res = await withTimeout(stall, 30)('u');
+  await assert.rejects(res.json());
+});
+
+test('withTimeout: 応答そのものが返らず、中断の合図も無視されても時間切れで失敗する', async () => {
+  await assert.rejects(withTimeout(() => new Promise(() => {}), 30)('u'));
 });
 
 test('withTimeout: 返ってこない取得は時間切れで失敗し、中断の合図を送る', async () => {

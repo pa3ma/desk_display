@@ -5,7 +5,7 @@ import { dueNotifications, notifiedKey, loadNotified, saveNotified } from './cor
 import { validateReminder, loadReminders, saveReminders, dueReminders, reminderKey, MAX_REMINDERS } from './core/reminders.js';
 import { jstDayStart } from './core/week.js';
 import { isNight } from './core/night.js';
-import { plugDecision, loadPowerState, savePowerState } from './core/power.js';
+import { plugDecision, loadPowerState, savePowerState, powerTrusted } from './core/power.js';
 import { createCachedSource } from './services/cache.js';
 import { loadWeather } from './services/weather.js';
 import { loadCalendar } from './services/calendar.js';
@@ -26,6 +26,8 @@ const RETURN_HOME_MS = 2 * 60000;
 const NIGHT_DIM_MS = 30000;
 const POWER_CHECK_MS = 60000;
 const HEARTBEAT_MS = 10 * 60000;
+const BATTERY_WAIT_MS = 10000;
+const POWER_BUSY_LIMIT_MS = 90000;
 const SCREENS = ['home', 'week', 'weather', 'settings', 'timer'];
 const demo = new URLSearchParams(location.search).has('demo');
 
@@ -171,21 +173,39 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---- 電池と充電の自動制御 ----
+// 方針: 迷ったら「プラグを入れる」側に倒す。電池の値を信用できないときは自動制御をやめ、
+// プラグを入れてから生存連絡も止める（中継の安全策が、入れたままにする）。
 let battery = demo ? demoState.battery : null; // { level: 0〜100, charging }
 let batteryUnavailable = false;
+let lastBatteryEventMs = now();                 // 電池の値が最後に変わった時刻
 let powerLast = loadPowerState(storage);        // 最後に成功した指示
 let powerFailed = false;                        // 最後の指示が中継に届かなかった
 let powerBusy = false;
+let powerBusySince = 0;
+let offResends = 0;                             // 「切」を送り直しても充電中のままだった回数
+let powerSuspended = false;                     // 値を信用できないため自動制御を止めた
+let suspendOnSent = false;                      // 止めたときの「入」が届いた
 let nextPowerCheckAt = 0;
 let nextHeartbeatAt = 0;
 
 function startBattery() {
   if (demo) return;
   if (typeof navigator.getBattery !== 'function') { batteryUnavailable = true; return; }
+  // 返事がないまま時間がたったら、読めないものとして扱う（後で値が届けば戻す）
+  setTimeout(() => { if (battery === null) batteryUnavailable = true; }, BATTERY_WAIT_MS);
   navigator.getBattery().then((manager) => {
     const read = () => {
       const level = Number(manager.level);
-      battery = Number.isFinite(level) ? { level: Math.round(level * 100), charging: Boolean(manager.charging) } : null;
+      if (!Number.isFinite(level) || level < 0 || level > 1) {
+        battery = null;
+        batteryUnavailable = true;
+        return;
+      }
+      const next = { level: Math.round(level * 100), charging: Boolean(manager.charging) };
+      if (!battery || battery.level !== next.level || battery.charging !== next.charging) lastBatteryEventMs = now();
+      if (next.charging === false) offResends = 0; // 切れて充電が止まった
+      battery = next;
+      batteryUnavailable = false;
       evaluatePower();
     };
     manager.addEventListener('levelchange', read);
@@ -195,36 +215,67 @@ function startBattery() {
 }
 
 function powerActive() {
-  return !demo && settings.plugEnabled && settings.relayUrl !== '' && battery !== null;
+  return !demo && settings.plugEnabled && settings.relayUrl !== '' && battery !== null && !batteryUnavailable;
+}
+
+// 中継への指示。成功したら true
+async function command(state) {
+  if (powerBusy && now() - powerBusySince < POWER_BUSY_LIMIT_MS) return false;
+  powerBusy = true;
+  powerBusySince = now();
+  let ok = false;
+  try { ok = await sendPlug(settings, state, timedFetch); } catch { ok = false; }
+  powerBusy = false;
+  powerFailed = !ok;
+  if (ok) {
+    powerLast = { state, atMs: now() };
+    savePowerState(storage, powerLast);
+    nextHeartbeatAt = now() + HEARTBEAT_MS; // 指示も生存連絡を兼ねる
+  }
+  return ok;
 }
 
 async function evaluatePower() {
   nextPowerCheckAt = now() + POWER_CHECK_MS;
-  if (!powerActive() || powerBusy) return;
+  if (!powerActive()) return;
+  if (powerSuspended) {
+    if (!suspendOnSent) suspendOnSent = await command('on');
+    return;
+  }
+  if (!powerTrusted({ nowMs: now(), lastBatteryEventMs, last: powerLast, offResends })) {
+    powerSuspended = true;
+    suspendOnSent = await command('on');
+    return;
+  }
   const decision = plugDecision({
     level: battery.level, charging: battery.charging, low: settings.plugLow, high: settings.plugHigh,
     last: powerLast, nowMs: now(),
   });
   if (decision === null) return;
-  powerBusy = true;
-  const ok = await sendPlug(settings, decision, timedFetch);
-  powerBusy = false;
-  powerFailed = !ok;
-  if (ok) {
-    powerLast = { state: decision, atMs: now() };
-    savePowerState(storage, powerLast);
-    nextHeartbeatAt = now() + HEARTBEAT_MS; // 指示も生存連絡を兼ねる
-  }
+  const resend = powerLast !== null && powerLast.state === decision;
+  if (await command(decision)) offResends = decision === 'off' && resend ? offResends + 1 : 0;
 }
 
-// 電池を読めない端末では生存連絡を送らない。中継の安全策がプラグを入れたままにする
+// 生存連絡は、画面が表示されていて、電池の値を信用できるときだけ送る。
+// 画面が隠れて電池の値が止まっている間に生存連絡だけ続くと、中継の安全策が働かなくなるため。
 async function powerTick() {
   if (!powerActive()) return;
   if (now() >= nextPowerCheckAt) evaluatePower();
+  if (powerSuspended || document.visibilityState !== 'visible') return;
+  if (!powerTrusted({ nowMs: now(), lastBatteryEventMs, last: powerLast, offResends })) return;
   if (now() >= nextHeartbeatAt) {
     nextHeartbeatAt = now() + HEARTBEAT_MS;
     sendHeartbeat(settings, timedFetch);
   }
+}
+
+function resumePower() {
+  powerSuspended = false;
+  suspendOnSent = false;
+  offResends = 0;
+  lastBatteryEventMs = now();
+  nextPowerCheckAt = 0;
+  nextHeartbeatAt = 0;
 }
 
 function powerStatusText() {
@@ -232,6 +283,10 @@ function powerStatusText() {
   const parts = [battery ? `残量 ${battery.level}%${battery.charging ? '（充電中）' : ''}` : '電池の状態を確認しています'];
   if (!settings.plugEnabled) parts.push('自動制御は無効です');
   else if (!settings.relayUrl) parts.push('Googleカレンダーの中継URLを入れると使えます');
+  if (powerSuspended) {
+    parts.push('電池の値が変わらないか、充電の状態と合わないため、自動制御を止めました（プラグは入れてあります）。'
+      + 'ホームの残量がタブレット本体の表示と合っているか確かめてから「保存する」を押すと再開します');
+  }
   if (powerLast) parts.push(`最後の指示: ${powerLast.state === 'on' ? '入' : '切'}（${formatClock(powerLast.atMs)}）`);
   if (powerFailed) parts.push('指示が中継に届いていません。中継の更新と SwitchBot の設定を確認してください');
   return parts.join('　');
@@ -276,8 +331,7 @@ document.getElementById('settings-form').addEventListener('submit', (event) => {
   if (!result.ok) { renderSettings(document, { values: input, errors: result.errors }); return; }
   settings = result.settings;
   timer.setDurations(toDurations(settings));
-  nextPowerCheckAt = 0;
-  nextHeartbeatAt = 0;
+  resumePower();
   location.hash = '#home';
   refreshAll();
 });

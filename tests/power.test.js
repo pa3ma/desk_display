@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { plugDecision, loadPowerState, savePowerState } from '../src/core/power.js';
+import { plugDecision, loadPowerState, savePowerState, powerTrusted, STALE_MS, MAX_OFF_RESENDS } from '../src/core/power.js';
 import { fakeStorage } from './helpers.js';
 
 const NOW = 1_000_000_000;
@@ -47,4 +47,23 @@ test('loadPowerState / savePowerState: 往復し、壊れたデータは null', 
   assert.deepEqual(loadPowerState(storage), { state: 'on', atMs: 5 });
   assert.equal(loadPowerState(fakeStorage({ 'desk.power': '{"state":"maybe","atMs":1}' })), null);
   assert.equal(loadPowerState(fakeStorage({ 'desk.power': 'x' })), null);
+});
+
+test('powerTrusted: 切った後に電池の値が60分変わらなければ信用しない', () => {
+  const t = (over) => powerTrusted({ nowMs: NOW, lastBatteryEventMs: NOW, last: { state: 'off', atMs: NOW }, offResends: 0, ...over });
+  assert.equal(STALE_MS, 60 * MIN);
+  assert.equal(t({ lastBatteryEventMs: NOW - 60 * MIN }), true);
+  assert.equal(t({ lastBatteryEventMs: NOW - 60 * MIN - 1 }), false);
+});
+
+test('powerTrusted: 入れている間は、値が変わらなくても信用する（満充電で止まることがあるため）', () => {
+  assert.equal(powerTrusted({ nowMs: NOW, lastBatteryEventMs: NOW - 5 * 60 * MIN, last: { state: 'on', atMs: NOW }, offResends: 0 }), true);
+  assert.equal(powerTrusted({ nowMs: NOW, lastBatteryEventMs: NOW - 5 * 60 * MIN, last: null, offResends: 0 }), true);
+});
+
+test('powerTrusted: 切る指示を送り直しても充電中のままなら、2回で信用しない', () => {
+  assert.equal(MAX_OFF_RESENDS, 2);
+  const t = (n) => powerTrusted({ nowMs: NOW, lastBatteryEventMs: NOW, last: { state: 'off', atMs: NOW }, offResends: n });
+  assert.equal(t(1), true);
+  assert.equal(t(2), false);
 });
