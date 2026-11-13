@@ -24,6 +24,8 @@
  *  1. スクリプト プロパティに次の3つを追加する。
  *     SWITCHBOT_TOKEN / SWITCHBOT_SECRET … SwitchBot アプリの開発者向けオプションで取得
  *     SWITCHBOT_DEVICE_ID … プラグのデバイスID
+ *       （分からないときは、先にトークンとシークレットだけ登録し、編集画面で関数 listSwitchBotDevices を選んで
+ *        「実行」→ 実行ログに出る一覧から、プラグの ID を写す）
  *  2. 左の時計アイコン「トリガー」→「トリガーを追加」
  *     実行する関数: failSafe / イベントのソース: 時間主導型 / 分ベースのタイマー / 15分おき
  */
@@ -124,6 +126,32 @@ function setPlug_(state) {
   } catch (err) {
     return false;
   }
+}
+
+/** 編集画面から手で実行する。自分の SwitchBot デバイスの名前・ID・種類を実行ログに出す（トークン類は出さない） */
+function listSwitchBotDevices() {
+  var p = props_();
+  var token = p.getProperty('SWITCHBOT_TOKEN');
+  var secret = p.getProperty('SWITCHBOT_SECRET');
+  if (!token || !secret) {
+    console.log('先にスクリプト プロパティに SWITCHBOT_TOKEN と SWITCHBOT_SECRET を登録してください');
+    return [];
+  }
+  var response = UrlFetchApp.fetch(SWITCHBOT_API + '/devices', {
+    method: 'get',
+    headers: switchBotHeaders_(token, secret, nowMs_(), Utilities.getUuid()),
+    muteHttpExceptions: true
+  });
+  var body = JSON.parse(response.getContentText());
+  if (body.statusCode !== 100) {
+    console.log('一覧を取得できませんでした: ' + body.message);
+    return [];
+  }
+  var list = (body.body.deviceList || []).map(function (d) {
+    return { id: d.deviceId, name: d.deviceName, type: d.deviceType };
+  });
+  list.forEach(function (d) { console.log(d.name + '（' + d.type + '）: ' + d.id); });
+  return list;
 }
 
 function shouldFailSafe(lastSeenMs, nowMs) {

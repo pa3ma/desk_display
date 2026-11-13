@@ -148,3 +148,30 @@ test('failSafe: 連絡が続いている・SwitchBot 未設定なら何もしな
   gas.failSafe();
   assert.equal(fetches.length, 0);
 });
+
+test('listSwitchBotDevices: 自分のデバイスの名前・ID・種類を返す（編集画面から実行して確認する用）', () => {
+  withPlug();
+  fetchReply = { code: 200, body: JSON.stringify({ statusCode: 100, body: { deviceList: [
+    { deviceId: 'AABBCCDDEEFF', deviceName: '充電用プラグ', deviceType: 'Plug Mini (JP)' },
+    { deviceId: '112233445566', deviceName: '温湿度計', deviceType: 'Meter' },
+  ] } }) };
+  const logged = [];
+  gas.console = { log: (...a) => logged.push(a.join(' ')) };
+  const list = gas.listSwitchBotDevices();
+  assert.deepEqual(JSON.parse(JSON.stringify(list)), [
+    { id: 'AABBCCDDEEFF', name: '充電用プラグ', type: 'Plug Mini (JP)' },
+    { id: '112233445566', name: '温湿度計', type: 'Meter' },
+  ]);
+  assert.equal(fetches[0].url, 'https://api.switch-bot.com/v1.1/devices');
+  assert.equal(fetches[0].options.method, 'get');
+  assert.ok(logged.some((line) => line.includes('AABBCCDDEEFF') && line.includes('充電用プラグ')));
+  assert.ok(!logged.some((line) => line.includes('sb-secret') || line.includes('sb-token')));
+});
+
+test('listSwitchBotDevices: トークンとシークレットが未設定なら案内を出して空を返す', () => {
+  const logged = [];
+  gas.console = { log: (...a) => logged.push(a.join(' ')) };
+  assert.equal(gas.listSwitchBotDevices().length, 0);
+  assert.equal(fetches.length, 0);
+  assert.ok(logged.some((line) => line.includes('SWITCHBOT_TOKEN')));
+});
