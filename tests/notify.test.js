@@ -3,16 +3,67 @@ import assert from 'node:assert/strict';
 import { createNotifier } from '../src/ui/notify.js';
 import { createDimmer } from '../src/ui/dim.js';
 
-// 鳴らした音の回数だけ数える偽の AudioContext
+// 鳴らした音を記録する偽の AudioContext
 function fakeAudio(initialState = 'running') {
-  const log = { tones: 0, resumed: 0, ctx: null };
-  const node = () => ({ connect() {}, start() { log.tones++; }, stop() {},
+  const log = { tones: 0, resumed: 0, ctx: null, stops: [], volumes: [], disconnects: 0 };
+  const node = () => ({ connect() {}, disconnect() { log.disconnects++; },
+    start() { log.tones++; }, stop(t) { log.stops.push(t); },
     frequency: { value: 0 }, type: '',
-    gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} } });
+    gain: { value: 1, setValueAtTime() {}, linearRampToValueAtTime(v) { log.volumes.push(v); }, exponentialRampToValueAtTime() {} } });
   const factory = () => (log.ctx = { currentTime: 0, state: initialState, destination: {},
     createOscillator: node, createGain: node, resume() { log.resumed++; return Promise.resolve(); } });
   return { log, factory };
 }
+function unlocked() {
+  const { log, factory } = fakeAudio();
+  const n = createNotifier({ audioContextFactory: factory, flash: () => {} });
+  n.unlock();
+  log.tones = 0; log.stops = []; log.volumes = []; log.disconnects = 0;
+  return { n, log };
+}
+
+test('タイマーの終了音（作業・休憩）は約7秒続く', () => {
+  for (const kind of ['work_end', 'break_end']) {
+    const { n, log } = unlocked();
+    n.notify(kind);
+    const end = Math.max(...log.stops);
+    assert.ok(end >= 6.8 && end <= 7.2, `${kind}: ${end}`);
+    assert.ok(log.tones >= 14, `${kind}: ${log.tones} 音`);
+  }
+});
+
+test('予定とリマインダーの音は短いまま（1秒以内）', () => {
+  const { n, log } = unlocked();
+  n.notify('event');
+  assert.ok(Math.max(...log.stops) <= 1);
+});
+
+test('silence: 鳴っている音を止める。止めた後も次の通知は鳴る', () => {
+  const { n, log } = unlocked();
+  n.silence();
+  assert.equal(log.disconnects, 0);
+  n.notify('work_end');
+  n.silence();
+  assert.equal(log.disconnects, 1);
+  n.silence();
+  assert.equal(log.disconnects, 1);
+  log.tones = 0;
+  n.notify('event');
+  assert.ok(log.tones > 0);
+});
+
+test('新しい通知は、鳴っている前の通知を止めてから鳴らす', () => {
+  const { n, log } = unlocked();
+  n.notify('work_end');
+  n.notify('event');
+  assert.equal(log.disconnects, 1);
+});
+
+test('unlock の確認音は、タブレットのスピーカーで聞こえる音量にする', () => {
+  const { log, factory } = fakeAudio();
+  createNotifier({ audioContextFactory: factory, flash: () => {} }).unlock();
+  assert.ok(Math.max(...log.volumes) >= 0.3);
+});
 
 test('unlock 前は音を鳴らさず flash だけ呼ぶ', () => {
   const { log, factory } = fakeAudio(); const flashes = [];

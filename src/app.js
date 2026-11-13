@@ -149,6 +149,8 @@ let lastInteraction = now();
 for (const type of ['pointerdown', 'keydown', 'input']) {
   document.addEventListener(type, () => { dimmer.touch(); lastInteraction = now(); }, true);
 }
+// 画面に触れたら、鳴っている通知音を止める（気付いた合図）
+document.addEventListener('pointerdown', () => notifier.silence(), true);
 // 音の許可は「指を離した」操作でないと通らないブラウザがあるため click で行う。
 // 実際に音が出せる状態になるまで、タッチのたびに試す。
 document.addEventListener('click', () => {
