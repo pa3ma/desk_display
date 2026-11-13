@@ -81,6 +81,18 @@ export function weatherLabel(code) {
   return hit ? { text: hit[1], icon: hit[2] } : { text: '不明', icon: '❔' };
 }
 
+// 雨・雪として知らせる天気コード（霧雨、雨、雪、にわか雨、にわか雪、雷雨）
+const WET_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 97, 99]);
+
+// これから withinMs 以内に雨が降りそうな最初の時間帯。なければ null
+export function rainNotice(forecast, nowMs, { withinMs = 3 * 3600e3, minPop = 50 } = {}) {
+  const hit = forecast.hours.find((h) =>
+    h.timeMs >= nowMs && h.timeMs < nowMs + withinMs &&
+    (WET_CODES.has(h.code) || (h.pop !== null && h.pop >= minPop)));
+  if (!hit) return null;
+  return { timeMs: hit.timeMs, pop: hit.pop, text: WET_CODES.has(hit.code) ? weatherLabel(hit.code).text : '雨' };
+}
+
 export async function loadWeather(settings, fetchFn = fetch) {
   if (settings.latitude === null || settings.longitude === null) throw new Error('場所が未設定です');
   const res = await fetchFn(weatherUrl(settings));

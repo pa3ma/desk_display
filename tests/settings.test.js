@@ -7,6 +7,8 @@ test('DEFAULTS は仕様の既定値', () => {
   assert.deepEqual(DEFAULTS, {
     latitude: null, longitude: null, relayUrl: '', workMin: 25, shortBreakMin: 5,
     longBreakMin: 15, cyclesBeforeLong: 4, notifyLeadMin: 10, dimAfterMin: 5,
+    nightEnabled: true, nightStart: '22:00', nightEnd: '07:00',
+    plugEnabled: false, plugLow: 35, plugHigh: 80,
   });
 });
 
@@ -37,6 +39,7 @@ test('saveSettings: 文字列の数値は数に直して保存する', () => {
   const r = saveSettings(storage, {
     latitude: '35.68', longitude: '139.76', relayUrl: '  ', workMin: '30', shortBreakMin: '5',
     longBreakMin: '15', cyclesBeforeLong: '4', notifyLeadMin: '10', dimAfterMin: '5',
+    nightEnabled: true, nightStart: '22:00', nightEnd: '07:00', plugEnabled: false, plugLow: '35', plugHigh: '80',
   });
   assert.equal(r.ok, true);
   assert.deepEqual(r.settings, { ...DEFAULTS, latitude: 35.68, longitude: 139.76, workMin: 30 });
@@ -69,4 +72,30 @@ test('saveSettings: script.google.com 以外の中継URLは拒否', () => {
 
 test('toDurations: 分をミリ秒に直す', () => {
   assert.deepEqual(toDurations(DEFAULTS), { workMs: 1500000, shortBreakMs: 300000, longBreakMs: 900000, cyclesBeforeLong: 4 });
+});
+
+test('saveSettings: プラグの下限は20〜50、上限は60〜90、夜間の時刻は HH:MM', () => {
+  const r = saveSettings(fakeStorage(), { ...DEFAULTS, plugLow: '19', plugHigh: '95', nightStart: '25:00', nightEnd: '7:00' });
+  assert.equal(r.ok, false);
+  assert.deepEqual(Object.keys(r.errors).sort(), ['nightEnd', 'nightStart', 'plugHigh', 'plugLow']);
+  assert.equal(saveSettings(fakeStorage(), { ...DEFAULTS, plugLow: '20', plugHigh: '90', nightStart: '00:00', nightEnd: '23:59' }).ok, true);
+});
+
+test('saveSettings: チェックボックスの値を真偽値に直す', () => {
+  const on = saveSettings(fakeStorage(), { ...DEFAULTS, nightEnabled: 'on', plugEnabled: true }).settings;
+  assert.equal(on.nightEnabled, true); assert.equal(on.plugEnabled, true);
+  const off = saveSettings(fakeStorage(), { ...DEFAULTS, nightEnabled: undefined, plugEnabled: false }).settings;
+  assert.equal(off.nightEnabled, false); assert.equal(off.plugEnabled, false);
+});
+
+test('loadSettings: v1 形式の保存データは新しい項目を既定値で補う', () => {
+  const v1 = { latitude: 35.68, longitude: 139.76, relayUrl: '', workMin: 30, shortBreakMin: 5, longBreakMin: 15, cyclesBeforeLong: 4, notifyLeadMin: 10, dimAfterMin: 5 };
+  assert.deepEqual(loadSettings(fakeStorage({ 'desk.settings': JSON.stringify(v1) })), { ...DEFAULTS, ...v1 });
+});
+
+test('loadSettings: 保存済みの false は false のまま読む', () => {
+  const storage = fakeStorage();
+  saveSettings(storage, { ...DEFAULTS, nightEnabled: false, plugEnabled: true });
+  const s = loadSettings(storage);
+  assert.equal(s.nightEnabled, false); assert.equal(s.plugEnabled, true);
 });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { weatherUrl, parseForecast, nextHours, weatherLabel, loadWeather } from '../src/services/weather.js';
+import { weatherUrl, parseForecast, nextHours, weatherLabel, loadWeather, rainNotice } from '../src/services/weather.js';
 
 const fixture = () => JSON.parse(readFileSync(new URL('./fixtures/open-meteo.json', import.meta.url), 'utf8'));
 const BASE = Date.parse('2026-11-12T00:00:00+09:00');
@@ -74,4 +74,29 @@ test('loadWeather: 取得して変換する。HTTPエラーは throw', async () 
   assert.equal(f.current.tempC, 14.3);
   assert.equal(asked, weatherUrl({ latitude: 35.68, longitude: 139.76 }));
   await assert.rejects(loadWeather({ latitude: 1, longitude: 2 }, async () => ({ ok: false, status: 500, json: async () => ({}) })));
+});
+
+const hourly = (list) => ({ current: { tempC: 10, code: 1 }, tomorrow: { code: 1, maxC: 1, minC: 0 },
+  hours: list.map(([offsetH, code, pop]) => ({ timeMs: BASE + offsetH * H, tempC: 10, code, pop })) });
+
+test('rainNotice: 3時間以内に雨がなければ null', () => {
+  assert.equal(rainNotice(hourly([[0, 1, 10], [1, 2, 20], [2, 3, 49], [3, 61, 90]]), BASE), null);
+});
+
+test('rainNotice: 降水確率50%以上の最初の時間帯を返す', () => {
+  const n = rainNotice(hourly([[0, 1, 10], [1, 3, 30], [2, 3, 60], [2.5, 61, 90]]), BASE + 0.5 * H);
+  assert.deepEqual(n, { timeMs: BASE + 2 * H, pop: 60, text: '雨' });
+});
+
+test('rainNotice: 降水確率が不明でも天気コードが雨・雪・雷雨なら該当', () => {
+  assert.deepEqual(rainNotice(hourly([[1, 61, null]]), BASE), { timeMs: BASE + H, pop: null, text: '雨' });
+  assert.equal(rainNotice(hourly([[1, 71, 10]]), BASE).text, '雪');
+  assert.equal(rainNotice(hourly([[1, 95, 10]]), BASE).text, '雷雨');
+  assert.equal(rainNotice(hourly([[1, 45, 10]]), BASE), null);
+});
+
+test('rainNotice: すでに過ぎた時間帯と、3時間ちょうど先は対象外', () => {
+  assert.equal(rainNotice(hourly([[0, 61, 90], [4, 61, 90]]), BASE + 1 * H), null);
+  assert.equal(rainNotice(hourly([[3, 61, 90]]), BASE), null);
+  assert.notEqual(rainNotice(hourly([[3, 61, 90]]), BASE + 1), null);
 });

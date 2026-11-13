@@ -1,10 +1,14 @@
 // 設定の既定値・読み書き・検証。値は端末の localStorage にだけ保存する。
+import { isTimeText } from './reminders.js';
+
 const KEY = 'desk.settings';
 const RELAY_PREFIX = 'https://script.google.com/';
 
 export const DEFAULTS = Object.freeze({
   latitude: null, longitude: null, relayUrl: '', workMin: 25, shortBreakMin: 5,
   longBreakMin: 15, cyclesBeforeLong: 4, notifyLeadMin: 10, dimAfterMin: 5,
+  nightEnabled: true, nightStart: '22:00', nightEnd: '07:00',
+  plugEnabled: false, plugLow: 35, plugHigh: 80,
 });
 
 const MINUTE_FIELDS = ['workMin', 'shortBreakMin', 'longBreakMin', 'notifyLeadMin', 'dimAfterMin'];
@@ -16,6 +20,8 @@ function toNumber(value) {
 }
 const isBlank = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 const intInRange = (n, min, max) => Number.isInteger(n) && n >= min && n <= max;
+// チェックボックス（'on'／未定義）と保存済みの真偽値の両方を受ける
+const toBool = (v) => v === true || v === 'on' || v === 'true';
 
 // 入力を検証し、{ settings, errors } を返す
 function validate(input) {
@@ -44,6 +50,19 @@ function validate(input) {
   const cycles = toNumber(input.cyclesBeforeLong);
   if (!intInRange(cycles, 1, 10)) errors.cyclesBeforeLong = '1〜10 の整数で入力してください';
   else settings.cyclesBeforeLong = cycles;
+
+  for (const field of ['nightStart', 'nightEnd']) {
+    if (!isTimeText(input[field])) errors[field] = '時刻は 22:00 の形で入力してください';
+    else settings[field] = input[field];
+  }
+  settings.nightEnabled = toBool(input.nightEnabled);
+
+  const low = toNumber(input.plugLow), high = toNumber(input.plugHigh);
+  if (!intInRange(low, 20, 50)) errors.plugLow = '20〜50 の整数で入力してください';
+  else settings.plugLow = low;
+  if (!intInRange(high, 60, 90)) errors.plugHigh = '60〜90 の整数で入力してください';
+  else settings.plugHigh = high;
+  settings.plugEnabled = toBool(input.plugEnabled);
 
   return { settings, errors };
 }
